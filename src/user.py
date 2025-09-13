@@ -3,20 +3,11 @@ import sys
 import os
 import asyncio
 import uuid
+import time
 from loguru import logger
 from datetime import datetime, timedelta
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-logger.remove()
-logger.add(
-    sys.stdout,
-    colorize=True,
-    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue> {extra[user]} </blue> <level>{message}</level>",
-    backtrace=True,
-    diagnose=True,
-)
-
 
 class BiliUser:
     def __init__(self, access_token: str, whiteUIDs: str = '', bannedUIDs: str = '', config: dict = {}):
@@ -31,7 +22,7 @@ class BiliUser:
             raise ValueError("白名单或黑名单格式错误")
         self.config = config
         self.medals = []  # 用户所有勋章
-        self.medalsNeedDo = []  # 用户所有勋章，等级小于20的 未满1500的
+        self.medalsNeedDo = []  # 当日亲密度未满 30 的勋章
 
         self.session = ClientSession(timeout=ClientTimeout(total=3), trust_env = True)
         self.api = BiliApi(self, self.session)
@@ -61,22 +52,6 @@ class BiliUser:
         self.isLogin = True
         return True
 
-    async def doSign(self):
-        try:
-            signInfo = await self.api.doSign()
-            self.log.log("SUCCESS", "签到成功,本月签到次数: {}/{}".format(signInfo['hadSignDays'], signInfo['allDays']))
-            self.message.append(f"【{self.name}】 签到成功,本月签到次数: {signInfo['hadSignDays']}/{signInfo['allDays']}")
-        except Exception as e:
-            self.log.log("ERROR", e)
-            self.errmsg.append(f"【{self.name}】" + str(e))
-        userInfo = await self.api.getUserInfo()
-        self.log.log(
-            "INFO", "当前用户UL等级: {} ,还差 {} 经验升级".format(userInfo['exp']['user_level'], userInfo['exp']['unext'])
-        )
-        self.message.append(
-            f"【{self.name}】 UL等级: {userInfo['exp']['user_level']} ,还差 {userInfo['exp']['unext']} 经验升级"
-        )
-
     async def getMedals(self):
         """
         获取用户勋章
@@ -96,7 +71,7 @@ class BiliUser:
         [
             self.medalsNeedDo.append(medal)
             for medal in self.medals
-            if medal['medal']['level'] < 20 and medal['medal']['today_feed'] < 1500
+            if medal['medal']['today_feed'] < 30
         ]
 
     async def like_v3(self, failedMedals: list = []):
@@ -150,31 +125,44 @@ class BiliUser:
         if not self.config['DANMAKU_CD']:
             self.log.log("INFO", "弹幕任务关闭")
             return
-        self.log.log("INFO", "弹幕打卡任务开始....(预计 {} 秒完成)".format(len(self.medals) * self.config['DANMAKU_CD']))
+        # 计算实际执行的长度
+        filtered_medals = [
+            medal for medal in self.medals
+            if not (self.config['DANMAKU_CHECK_LIGHT'] and medal['medal']['is_lighted'] == 1)
+            and not (not self.config['DANMAKU_CHECK_LEVEL'] and medal['medal']['level'] > 20)
+        ]
+        filtered_medals_length = len(filtered_medals)
+        self.log.log("INFO", "弹幕打卡任务开始....(预计 {} 秒完成)".format(filtered_medals_length * self.config['DANMAKU_CD'] * self.config['DANMAKU_NUM']))
         n = 0
         successnum = 0
         for medal in self.medals:
             n += 1
+            if self.config['DANMAKU_CHECK_LIGHT'] and medal['medal']['is_lighted'] == 1:
+                self.log.log("INFO", "{} 房间已点亮，跳过".format(medal['anchor_info']['nick_name']))
+                continue
+            if not self.config['DANMAKU_CHECK_LEVEL'] and medal['medal']['level'] > 20:
+                self.log.log("INFO", "{} 房间已满级，跳过".format(medal['anchor_info']['nick_name']))
+                continue
             (await self.api.wearMedal(medal['medal']['medal_id'])) if self.config['WEARMEDAL'] else ...
-            try:
-                danmaku = await self.api.sendDanmaku(medal['room_info']['room_id'])
-                successnum+=1
-                self.log.log(
-                    "DEBUG",
-                    "{} 房间弹幕打卡成功: {} ({}/{})".format(
-                        medal['anchor_info']['nick_name'], danmaku, n, len(self.medals)
-                    ),
-                )
-            except Exception as e:
-                self.log.log("ERROR", "{} 房间弹幕打卡失败: {}".format(medal['anchor_info']['nick_name'], e))
-                self.errmsg.append(f"【{self.name}】 {medal['anchor_info']['nick_name']} 房间弹幕打卡失败: {str(e)}")
-            finally:
-                await asyncio.sleep(self.config['DANMAKU_CD'])
-
+            for i in range(self.config['DANMAKU_NUM']):
+                try:
+                        danmaku = await self.api.sendDanmaku(medal['room_info']['room_id'])
+                        self.log.log(
+                            "INFO",
+                            "{} 房间弹幕打卡({}/{})成功: {} ({}/{})".format(
+                                medal['anchor_info']['nick_name'], i + 1, self.config['DANMAKU_NUM'], danmaku, n, len(self.medals)
+                            ),
+                        )
+                except Exception as e:
+                    self.log.log("ERROR", "{} 房间弹幕打卡({}/{})失败: {}".format(medal['anchor_info']['nick_name'], i, self.config['DANMAKU_NUM'], e))
+                    self.errmsg.append(f"【{self.name}】 {medal['anchor_info']['nick_name']} 房间弹幕打卡失败: {str(e)}")
+                finally:
+                    await asyncio.sleep(self.config['DANMAKU_CD'])
+            successnum+=1
         if hasattr(self, 'initialMedal'):
             (await self.api.wearMedal(self.initialMedal['medal_id'])) if self.config['WEARMEDAL'] else ...
         self.log.log("SUCCESS", "弹幕打卡任务完成")
-        self.message.append(f"【{self.name}】 弹幕打卡任务完成 {successnum}/{len(self.medals)}")
+        self.message.append(f"【{self.name}】 弹幕打卡任务完成 {successnum}/{filtered_medals_length}/{len(self.medals)}")
 
     async def init(self):
         if not await self.loginVerify():
@@ -182,18 +170,17 @@ class BiliUser:
             self.errmsg.append("登录失败 可能是 access_key 过期 , 请重新获取")
             await self.session.close()
         else:
-            await self.doSign()
             await self.getMedals()
 
     async def start(self):
         if self.isLogin:
             tasks = []
             if self.medalsNeedDo:
-                self.log.log("INFO", f"共有 {len(self.medalsNeedDo)} 个牌子未满 1500 亲密度")
+                self.log.log("INFO", f"共有 {len(self.medalsNeedDo)} 个牌子未满 30 亲密度")
                 tasks.append(self.like_v3())
                 tasks.append(self.watchinglive())
             else:
-                self.log.log("INFO", "所有牌子已满 1500 亲密度")
+                self.log.log("INFO", "所有牌子已满 30 亲密度")
             tasks.append(self.sendDanmaku())
             tasks.append(self.signInGroups())
             await asyncio.gather(*tasks)
@@ -205,26 +192,24 @@ class BiliUser:
         await self.getMedals()
         nameList1, nameList2, nameList3, nameList4 = [], [], [], []
         for medal in self.medals:
-            if medal['medal']['level'] >= 20:
-                continue
             today_feed = medal['medal']['today_feed']
             nick_name = medal['anchor_info']['nick_name']
-            if today_feed >= 1500:
+            if today_feed >= 30:
                 nameList1.append(nick_name)
-            elif 1200 <= today_feed < 1500:
+            elif 24 <= today_feed < 30:
                 nameList2.append(nick_name)
-            elif 300 <= today_feed < 1200:
+            elif 6 <= today_feed < 24:
                 nameList3.append(nick_name)
-            elif today_feed < 300:
+            elif today_feed < 6:
                 nameList4.append(nick_name)
-        self.message.append(f"【{self.name}】 今日亲密度获取情况如下（20级以下）：")
+        self.message.append(f"【{self.name}】 今日亲密度获取情况如下：")
 
         for l, n in zip(
             [nameList1, nameList2, nameList3, nameList4],
-            ["【1500】", "【1200至1500】", "【300至1200】", "【300以下】"],
+            ["【30】", "【24至30】", "【6至24】", "【6以下】"],
         ):
             if len(l) > 0:
-                self.message.append(f"{n}" + ' '.join(l[:5]) + f"{'等' if len(l) > 5 else ''}" + f' {len(l)}个')
+                self.message.append(f"{n}{' '.join(l[:5])}{'等' if len(l) > 5 else ''} {len(l)}个")
 
         if hasattr(self, 'initialMedal'):
             initialMedalInfo = await self.api.getMedalsInfoByUid(self.initialMedal['target_id'])
@@ -233,9 +218,9 @@ class BiliUser:
                 self.message.append(
                     f"【当前佩戴】「{initialMedal['medal_name']}」({initialMedal['target_name']}) {initialMedal['level']} 级 "
                 )
-                if initialMedal['level'] < 20 and initialMedal['today_feed'] != 0:
+                if initialMedal['today_feed'] != 0:
                     need = initialMedal['next_intimacy'] - initialMedal['intimacy']
-                    need_days = need // 1500 + 1
+                    need_days = need // 30 + 1
                     end_date = datetime.now() + timedelta(days=need_days)
                     self.message.append(f"今日已获取亲密度 {initialMedal['today_feed']} (B站结算有延迟，请耐心等待)")
                     self.message.append(
@@ -254,6 +239,10 @@ class BiliUser:
         for medal in self.medalsNeedDo:
             n += 1
             for heartNum in range(1, HEART_MAX+1):
+                if self.config['STOPWATCHINGTIME']:
+                    if int(time.time()) >= self.config['STOPWATCHINGTIME']:
+                        self.log.log("INFO", "已到设置的时间，自动停止直播任务")
+                        return
                 tasks = []
                 tasks.append(self.api.heartbeat(medal['room_info']['room_id'], medal['medal']['target_id']))
                 await asyncio.gather(*tasks)
