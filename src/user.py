@@ -21,27 +21,27 @@ class BiliUser:
         except ValueError:
             raise ValueError("白名单或黑名单格式错误")
         
+        self.config = {
+            "ASYNC": config["ASYNC"],
+            "LIKE_CD": config["LIKE_CD"],
+            "DANMAKU_CD": config["DANMAKU_CD"],
+            "DANMAKU_NUM": config["DANMAKU_NUM"],
+            "DANMAKU_CHECK_LIGHT": config["DANMAKU_CHECK_LIGHT"],
+            "DANMAKU_CHECK_LEVEL": config["DANMAKU_CHECK_LEVEL"],
+            "WATCHINGLIVE": config["WATCHINGLIVE"],
+            "WEARMEDAL": config["WEARMEDAL"],
+            "SIGNINGROUP": config.get("SIGNINGROUP", 2),
+            "WATCHALREADYGET30": config.get("WATCHALREADYGET30", 1),
+            "PROXY": config.get("PROXY"),
+            "STOPWATCHINGTIME": None,
+        }
+        
         # 配置验证
         assert self.config["DANMAKU_CHECK_LIGHT"] in [0, 1], "DANMAKU_CHECK_LIGHT参数错误"
         assert self.config["DANMAKU_CHECK_LEVEL"] in [0, 1], "DANMAKU_CHECK_LEVEL参数错误"
         assert self.config["WATCHINGLIVE"] >= 0, "WATCHINGLIVE参数错误"
         assert self.config["WEARMEDAL"] in [0, 1], "WEARMEDAL参数错误"
         assert self.config["WATCHALREADYGET30"] in [0, 1], "WATCHALREADYGET30参数错误"
-        
-        self.config = {
-            "ASYNC": self.config["ASYNC"],
-            "LIKE_CD": self.config["LIKE_CD"],
-            "DANMAKU_CD": self.config["DANMAKU_CD"],
-            "DANMAKU_NUM": self.config["DANMAKU_NUM"],
-            "DANMAKU_CHECK_LIGHT": self.config["DANMAKU_CHECK_LIGHT"],
-            "DANMAKU_CHECK_LEVEL": self.config["DANMAKU_CHECK_LEVEL"],
-            "WATCHINGLIVE": self.config["WATCHINGLIVE"],
-            "WEARMEDAL": self.config["WEARMEDAL"],
-            "SIGNINGROUP": self.config.get("SIGNINGROUP", 2),
-            "WATCHALREADYGET30": self.config.get("WATCHALREADYGET30", 1),
-            "PROXY": self.config.get("PROXY"),
-            "STOPWATCHINGTIME": None,
-        }
         self.medals = []  # 用户所有勋章
         self.medalsNeedDo = []  # 当日亲密度未满 30 的勋章
 
@@ -199,6 +199,9 @@ class BiliUser:
             if self.medalsNeedDo:
                 self.log.log("INFO", f"共有 {len(self.medalsNeedDo)} 个牌子未满 30 亲密度")
                 tasks.append(self.like_v3())
+                tasks.append(self.watchinglive())
+            elif self.config['WATCHALREADYGET30'] and self.medals:  # 即使所有牌子已满30亲密度，如果配置了WATCHALREADYGET30也执行观看任务
+                self.log.log("INFO", f"所有牌子已满 30 亲密度，但根据配置仍继续观看直播")
                 tasks.append(self.watchinglive())
             else:
                 self.log.log("INFO", "所有牌子已满 30 亲密度")
