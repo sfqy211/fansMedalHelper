@@ -20,7 +20,28 @@ class BiliUser:
             self.bannedList = list(map(lambda x: int(x if x else 0), str(bannedUIDs).split(',')))  # 黑名单
         except ValueError:
             raise ValueError("白名单或黑名单格式错误")
-        self.config = config
+        
+        # 配置验证
+        assert self.config["DANMAKU_CHECK_LIGHT"] in [0, 1], "DANMAKU_CHECK_LIGHT参数错误"
+        assert self.config["DANMAKU_CHECK_LEVEL"] in [0, 1], "DANMAKU_CHECK_LEVEL参数错误"
+        assert self.config["WATCHINGLIVE"] >= 0, "WATCHINGLIVE参数错误"
+        assert self.config["WEARMEDAL"] in [0, 1], "WEARMEDAL参数错误"
+        assert self.config["WATCHALREADYGET30"] in [0, 1], "WATCHALREADYGET30参数错误"
+        
+        self.config = {
+            "ASYNC": self.config["ASYNC"],
+            "LIKE_CD": self.config["LIKE_CD"],
+            "DANMAKU_CD": self.config["DANMAKU_CD"],
+            "DANMAKU_NUM": self.config["DANMAKU_NUM"],
+            "DANMAKU_CHECK_LIGHT": self.config["DANMAKU_CHECK_LIGHT"],
+            "DANMAKU_CHECK_LEVEL": self.config["DANMAKU_CHECK_LEVEL"],
+            "WATCHINGLIVE": self.config["WATCHINGLIVE"],
+            "WEARMEDAL": self.config["WEARMEDAL"],
+            "SIGNINGROUP": self.config.get("SIGNINGROUP", 2),
+            "WATCHALREADYGET30": self.config.get("WATCHALREADYGET30", 1),
+            "PROXY": self.config.get("PROXY"),
+            "STOPWATCHINGTIME": None,
+        }
         self.medals = []  # 用户所有勋章
         self.medalsNeedDo = []  # 当日亲密度未满 30 的勋章
 
@@ -236,7 +257,18 @@ class BiliUser:
         HEART_MAX = self.config['WATCHINGLIVE']
         self.log.log("INFO", f"每日{HEART_MAX}分钟任务开始")
         n = 0
-        for medal in self.medalsNeedDo:
+        
+        # 根据配置决定是否观看已经获得30亲密度的直播间
+        if self.config['WATCHALREADYGET30']:
+            # 观看所有直播间，包括已获得30亲密度的
+            medals_to_watch = self.medals
+            self.log.log("INFO", f"将观看所有 {len(medals_to_watch)} 个直播间")
+        else:
+            # 只观看未获得30亲密度的直播间
+            medals_to_watch = [medal for medal in self.medals if medal['medal']['today_feed'] < 30]
+            self.log.log("INFO", f"只观看未获得30亲密度的 {len(medals_to_watch)} 个直播间")
+            
+        for medal in medals_to_watch:
             n += 1
             for heartNum in range(1, HEART_MAX+1):
                 if self.config['STOPWATCHINGTIME']:
@@ -249,7 +281,7 @@ class BiliUser:
                 if heartNum%5==0:
                     self.log.log(
                         "INFO",
-                        f"{medal['anchor_info']['nick_name']} 第{heartNum}次心跳包已发送（{n}/{len(self.medalsNeedDo)}）",
+                        f"{medal['anchor_info']['nick_name']} 第{heartNum}次心跳包已发送（{n}/{len(medals_to_watch)}）",
                     )
                 await asyncio.sleep(60)
         self.log.log("SUCCESS", f"每日{HEART_MAX}分钟任务完成")

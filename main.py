@@ -66,6 +66,7 @@ try:
         "WATCHINGLIVE": users["WATCHINGLIVE"],
         "WEARMEDAL": users["WEARMEDAL"],
         "SIGNINGROUP": users.get("SIGNINGROUP", 2),
+        "WATCHALREADYGET30": users.get("WATCHALREADYGET30", 1),
         "PROXY": users.get("PROXY"),
         "STOPWATCHINGTIME": None,
     }
